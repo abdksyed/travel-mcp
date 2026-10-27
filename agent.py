@@ -56,7 +56,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import timeit
-    start = timeit.timeit()
     main()
-    print(timeit.timeit() - start)
