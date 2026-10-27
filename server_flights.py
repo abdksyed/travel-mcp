@@ -1,5 +1,6 @@
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import config
@@ -10,6 +11,10 @@ DUFFEL_URL = "https://api.duffel.com"
 
 
 def duffel(path: str, payload: dict | None = None) -> dict:
+    """Call the Duffel API. GET when payload is None, POST otherwise.
+
+    Every failure becomes a ToolError, because only ToolError text reaches the model.
+    """
     method = "POST" if payload is not None else "GET"
     request = urllib.request.Request(
         DUFFEL_URL + path,
@@ -27,6 +32,10 @@ def duffel(path: str, payload: dict | None = None) -> dict:
             return json.load(response)
     except urllib.error.HTTPError as error:
         raise ToolError(f"Duffel {error.code}: {error.read().decode()}") from error
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        raise ToolError(
+            f"Duffel request to {path.split('?')[0]} failed: {error}"
+        ) from error
 
 
 mcp = MCPServer("flights", version="0.1.0")
@@ -65,7 +74,7 @@ def search_flights(slices: list[dict]) -> list[dict]:
 @mcp.tool()
 def seats_for_offer(offer_id: str) -> dict:
     """Free seats per row for one offer. The raw seat map is too big for a model."""
-    maps = duffel(f"/air/seat_maps?offer_id={offer_id}")["data"]
+    maps = duffel(f"/air/seat_maps?offer_id={urllib.parse.quote(offer_id, safe='')}")["data"]
     if not maps:
         return {"cabins": []}
 
@@ -94,7 +103,7 @@ def seats_for_offer(offer_id: str) -> dict:
 @mcp.tool()
 def book_flight(offer_id: str, given_name: str, family_name: str) -> dict:
     """Book one offer for one adult passenger. Test mode only."""
-    offer = duffel(f"/air/offers/{offer_id}")["data"]
+    offer = duffel(f"/air/offers/{urllib.parse.quote(offer_id, safe='')}")["data"]
     passenger_id = offer["passengers"][0]["id"]
 
     order = duffel(
