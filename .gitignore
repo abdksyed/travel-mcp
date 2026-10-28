@@ -14,3 +14,5 @@ wheels/
 .agents/.env
 PLAN.md
 MCP_notes.pdf
+# macOS
+.DS_Store
