@@ -1,8 +1,12 @@
 import asyncio
+from pathlib import Path
 
 from mcp import Client, StdioServerParameters
 
-params = StdioServerParameters(command="uv", args=["run", "python", "server_flights.py"])
+here = Path(__file__).parent
+params = StdioServerParameters(
+    command="uv", args=["run", "python", "server_flights.py"], cwd=here
+)
 
 
 async def main():
@@ -19,7 +23,7 @@ async def main():
                 ]
             },
         )
-        print("result:", r.structured_content)
+        print("result:", r.structured_content if not r.is_error else r.content)
 
 
 asyncio.run(main())
