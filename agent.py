@@ -57,11 +57,17 @@ async def main():
                 print(f"[tool]    {call.function.name}({json.dumps(arguments)})")
 
                 r = await c.call_tool(call.function.name, arguments)
-                # content is one block per list element, so structured_content is the whole answer
-                content = json.dumps(r.structured_content)
-                result = r.structured_content["result"]
-                count = len(result) if isinstance(result, list) else 1
-                print(f"         -> {count} results")
+
+                # Three shapes: a list arrives as one block per element, a dict as one
+                # block, and an error as one block with structured_content None.
+                if r.is_error:
+                    content = "\n".join(b.text for b in r.content)
+                elif r.structured_content is not None:
+                    content = json.dumps(r.structured_content)
+                else:
+                    content = "\n".join(b.text for b in r.content)
+
+                print("         ->", content.splitlines()[0][:70])
 
                 messages.append(
                     {

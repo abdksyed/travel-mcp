@@ -59,6 +59,8 @@ def search_flights(slices: list[dict]) -> list[dict]:
         },
     )
     offers = data["data"]["offers"]
+    # Duffel does not guarantee price order, so sort before truncating
+    offers = sorted(offers, key=lambda o: float(o["total_amount"]))
     return [
         {
             "offer_id": offer["id"],
