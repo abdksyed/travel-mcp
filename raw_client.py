@@ -6,6 +6,9 @@ Run:  uv run python raw_client.py
 import json
 import subprocess
 import sys
+from pathlib import Path
+
+HERE = Path(__file__).parent
 
 META = {
     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -35,6 +38,7 @@ def send(proc, obj):
 def open_server():
     return subprocess.Popen(
         [sys.executable, "server_flights.py"],
+        cwd=HERE,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
