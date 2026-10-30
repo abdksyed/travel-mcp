@@ -165,7 +165,7 @@ def airports() -> str:
         "DEL Delhi Indira Gandhi\n"
         "LHR London Heathrow\n"
         "JFK New York John F Kennedy\n"
-        "LAX Los Angeles\n"
+        "LAX Los Angeles International\n"
         "LON London all airports"
     )
 
