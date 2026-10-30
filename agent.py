@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 
 from mcp import Client, StdioServerParameters
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 import config
 
@@ -25,7 +25,7 @@ PROMPT = (
 
 
 async def main():
-    llm = OpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
+    llm = AsyncOpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
 
     async with AsyncExitStack() as stack:
         clients = {}
@@ -68,7 +68,7 @@ async def main():
         messages.append({"role": "user", "content": PROMPT})
 
         while True:
-            response = llm.chat.completions.create(
+            response = await llm.chat.completions.create(
                 model=config.MODEL, messages=messages, tools=tools
             )
             message = response.choices[0].message
