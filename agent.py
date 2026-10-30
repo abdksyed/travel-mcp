@@ -16,12 +16,30 @@ servers = {
     ),
     # start it first: uv run python server_rail.py
     "rail": "http://127.0.0.1:8001/mcp",
+    # someone else's server, on an older spec version
+    "nuitee": f"https://mcp.liteapi.travel/api/mcp?apiKey={config.keys['nuitee']}",
 }
 
+# Nuitee lists 95 tools. Only these reach the model, and post_rates_book is not one.
+# The experience tools return 403 on this account, so they stay out too.
+allow = {
+    "nuitee": {"get_data_hotels", "post_hotels_rates", "post_rates_prebook", "get_data_reviews"},
+}
+
+# get_data_hotels without a limit returns half a megabyte. Nobody's context holds that.
+MAX_RESULT = 20_000
+
 PROMPT = (
-    "get me from Mumbai to Delhi on 5 December. Compare train and flight, "
-    "and tell me which is better value."
+    "I start in Bangalore on 5 December. Train to Mumbai, two nights there, then "
+    "train to Delhi, two nights. Then fly Delhi to London, three nights, and on to "
+    "New York, three nights. Plan the whole trip: the trains, the flights, a hotel "
+    "in each city with the price, and what to do in each city."
 )
+
+
+def schema_tokens(tools: list[dict]) -> int:
+    """Rough cost of the catalog, four characters to a token."""
+    return len(json.dumps(tools)) // 4
 
 
 async def main():
@@ -29,17 +47,20 @@ async def main():
 
     async with AsyncExitStack() as stack:
         clients = {}
-        tools = []
+        everything = []
         for name, target in servers.items():
             c = await stack.enter_async_context(Client(target))
             clients[name] = c
             listed = (await c.list_tools()).tools
             transport = "http" if isinstance(target, str) else "stdio"
-            print(f"[connect] {name:8} {transport:6} {len(listed)} tools")
+            print(
+                f"[connect] {name:8} {transport:6} {len(listed):3} tools"
+                f"   protocol {c.protocol_version}"
+            )
 
             # Two servers may both have a plan_journey. The prefix is the host's job.
             for t in listed:
-                tools.append(
+                everything.append(
                     {
                         "type": "function",
                         "function": {
@@ -49,7 +70,18 @@ async def main():
                         },
                     }
                 )
-        print(f"[catalog] {len(tools)} tools from {len(clients)} servers")
+        print(
+            f"[catalog] {len(everything)} tools from {len(clients)} servers,"
+            f" about {schema_tokens(everything)} tokens of schema per request"
+        )
+
+        # Every request pays for every schema, so cut the catalog down first.
+        tools = []
+        for t in everything:
+            server, tool = t["function"]["name"].split("__", 1)
+            if server not in allow or tool in allow[server]:
+                tools.append(t)
+        print(f"[catalog] filtered to {len(tools)} tools, about {schema_tokens(tools)} tokens")
         print("catalog:", [t["function"]["name"] for t in tools])
 
         messages = []
@@ -96,6 +128,12 @@ async def main():
                     content = json.dumps(r.structured_content)
                 else:
                     content = "\n".join(b.text for b in r.content)
+
+                if len(content) > MAX_RESULT:
+                    content = (
+                        content[:MAX_RESULT]
+                        + f"\n[truncated, {len(content)} chars. Ask for fewer results.]"
+                    )
 
                 print("         ->", content.splitlines()[0][:70])
 
