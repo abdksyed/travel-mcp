@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 from pathlib import Path
 
@@ -9,12 +10,15 @@ params = StdioServerParameters(
 )
 
 
-async def main():
-    async with Client(params) as c:
+async def main(url: str | None):
+    # a URL means Streamable HTTP, otherwise spawn the flights server over stdio
+    async with Client(url or params) as c:
         print("protocol:", c.protocol_version)
         print("server:", c.server_info.name, c.server_info.version)
-        for t in (await c.list_tools()).tools:
-            print("tool:", t.name, "|", t.description.splitlines()[0])
+        print("tools:", [t.name for t in (await c.list_tools()).tools])
+        print("resources:", [str(r.uri) for r in (await c.list_resources()).resources])
+        if url:
+            return
         r = await c.call_tool(
             "search_flights",
             {
@@ -26,4 +30,6 @@ async def main():
         print("result:", r.structured_content if not r.is_error else r.content)
 
 
-asyncio.run(main())
+parser = argparse.ArgumentParser()
+parser.add_argument("--url", help="Streamable HTTP endpoint, e.g. http://127.0.0.1:8001/mcp")
+asyncio.run(main(parser.parse_args().url))
