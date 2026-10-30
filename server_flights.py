@@ -1,4 +1,5 @@
 import asyncio
+import http.client
 import json
 import secrets
 import urllib.error
@@ -43,7 +44,8 @@ def duffel(path: str, payload: dict | None = None) -> dict:
             return json.load(response)
     except urllib.error.HTTPError as error:
         raise ToolError(f"Duffel {error.code}: {error.read().decode()}") from error
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+    # OSError covers URLError, timeouts and a connection reset mid-read
+    except (OSError, http.client.HTTPException, json.JSONDecodeError) as error:
         raise ToolError(
             f"Duffel request to {path.split('?')[0]} failed: {error}"
         ) from error
@@ -160,14 +162,17 @@ async def book_flight(
     # Round 2. Card numbers must never travel through MCP, so payment is a URL.
     if "passport" in answers:
         if answers["passport"].action != "accept":
-            return {"status": "booking cancelled by the user"}
+            return {"status": "booking cancelled, the user gave no passport details"}
         token = secrets.token_urlsafe(8)
         pending[token] = Passport.model_validate(answers["passport"].content).model_dump()
         return InputRequiredResult(
             input_requests={
                 "payment": ElicitRequest(
                     params=ElicitRequestURLParams(
-                        message="Pay for the flight on this page, then confirm here.",
+                        message=(
+                            "Payment would happen on this page. Sandbox: the page does not "
+                            "exist and nothing is charged, Duffel uses test balance. Confirm to book."
+                        ),
                         # sandbox: nothing is charged, Duffel takes it from test balance
                         url=f"https://pay.example.com/checkout/{token}",
                         elicitation_id=token,
@@ -182,7 +187,7 @@ async def book_flight(
     if passport is None:
         raise ToolError("Booking session expired, start again.")
     if answers.get("payment") is None or answers["payment"].action != "accept":
-        return {"status": "booking cancelled by the user"}
+        return {"status": "booking cancelled, the user did not confirm payment"}
 
     booking = await asyncio.to_thread(_book, offer_id, given_name, family_name, passport)
     bookings.append(booking)

@@ -55,9 +55,13 @@ async def ask_user(context, params) -> mcp_types.ElicitResult:
         print(f"          open {params.url}")
         done = await asyncio.to_thread(input, "          done? [y/n] ")
         return mcp_types.ElicitResult(action="accept" if done.strip() == "y" else "decline")
+    print("          leave any field blank to cancel")
     content = {}
     for key in params.requested_schema["properties"]:
-        content[key] = await asyncio.to_thread(input, f"          {key}: ")
+        value = (await asyncio.to_thread(input, f"          {key}: ")).strip()
+        if not value:
+            return mcp_types.ElicitResult(action="decline")
+        content[key] = value
     return mcp_types.ElicitResult(action="accept", content=content)
 
 

@@ -1,4 +1,5 @@
 import asyncio
+import http.client
 import json
 import urllib.error
 import urllib.parse
@@ -39,7 +40,8 @@ def railradar(path: str, payload: dict | None = None) -> dict:
             return json.load(response)["data"]
     except urllib.error.HTTPError as error:
         raise ToolError(f"RailRadar {error.code}: {error.read().decode()}") from error
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+    # OSError covers URLError, timeouts and a connection reset mid-read
+    except (OSError, http.client.HTTPException, json.JSONDecodeError) as error:
         raise ToolError(
             f"RailRadar request to {path.split('?')[0]} failed: {error}"
         ) from error
