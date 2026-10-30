@@ -5,6 +5,7 @@ from contextlib import AsyncExitStack
 from datetime import date
 from pathlib import Path
 
+import mcp_types
 from mcp import Client, StdioServerParameters
 from openai import AsyncOpenAI
 
@@ -41,6 +42,36 @@ PROMPT = (
 commands = {"/plan": ("rail", "plan_trip")}
 
 
+async def show_progress(progress: float, total: float | None, message: str | None) -> None:
+    """Called for every progress notification while a tool is still running."""
+    print(f"[progress] {progress:g}/{total:g} {message}")
+
+
+async def ask_user(context, params) -> mcp_types.ElicitResult:
+    """A server needs the human, not the model. Ask in the terminal."""
+    print(f"[elicit]  {params.message}")
+    if params.mode == "url":
+        # the user does this part in a browser, the answer never comes back through MCP
+        print(f"          open {params.url}")
+        done = await asyncio.to_thread(input, "          done? [y/n] ")
+        return mcp_types.ElicitResult(action="accept" if done.strip() == "y" else "decline")
+    print("          leave any field blank to cancel")
+    content = {}
+    for key in params.requested_schema["properties"]:
+        value = (await asyncio.to_thread(input, f"          {key}: ")).strip()
+        if not value:
+            return mcp_types.ElicitResult(action="decline")
+        content[key] = value
+    return mcp_types.ElicitResult(action="accept", content=content)
+
+
+async def watch(c: Client, sub) -> None:
+    """Re-read a resource each time the server says it changed."""
+    async for event in sub:
+        r = await c.read_resource(event.uri)
+        print(f"[event]   {event.uri} changed -> {r.contents[0].text}")
+
+
 def schema_tokens(tools: list[dict]) -> int:
     """Rough cost of the catalog, four characters to a token."""
     return len(json.dumps(tools)) // 4
@@ -61,7 +92,9 @@ async def main():
         clients = {}
         everything = []
         for name, target in servers.items():
-            c = await stack.enter_async_context(Client(target))
+            c = await stack.enter_async_context(
+                Client(target, elicitation_callback=ask_user)
+            )
             clients[name] = c
             listed = (await c.list_tools()).tools
             transport = "http" if isinstance(target, str) else "stdio"
@@ -93,6 +126,14 @@ async def main():
             server, tool = t["function"]["name"].split("__", 1)
             if server not in allow or tool in allow[server]:
                 tools.append(t)
+        # MCP is not only request and response. The server can speak first.
+        sub = await stack.enter_async_context(
+            clients["flights"].listen(resource_subscriptions=["flights://bookings"])
+        )
+        watcher = asyncio.create_task(watch(clients["flights"], sub))
+        stack.callback(watcher.cancel)
+        print("[listen]  flights://bookings")
+
         print(f"[catalog] filtered to {len(tools)} tools, about {schema_tokens(tools)} tokens")
         print("catalog:", [t["function"]["name"] for t in tools])
 
@@ -102,7 +143,10 @@ async def main():
         # rail://stations and rail://trains are 13k entries each, so they stay out.
         for uri in ("flights://policy/baggage", "flights://airports"):
             r = await clients["flights"].read_resource(uri)
-            print("[resource]", uri, "->", len(r.contents[0].text), "chars")
+            print(
+                "[resource]", uri, "->", len(r.contents[0].text), "chars,",
+                f"ttl {r.ttl_ms} ms {r.cache_scope}",
+            )
             messages.append(
                 {"role": "system", "content": f"{uri}\n{r.contents[0].text}"}
             )
@@ -142,7 +186,9 @@ async def main():
 
                 # Dispatch on the prefix. The host does not care which one is a pipe.
                 server, tool = call.function.name.split("__", 1)
-                r = await clients[server].call_tool(tool, arguments)
+                r = await clients[server].call_tool(
+                    tool, arguments, progress_callback=show_progress
+                )
 
                 # Three shapes: a list arrives as one block per element, a dict as one
                 # block, and an error as one block with structured_content None.

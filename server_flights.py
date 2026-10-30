@@ -1,11 +1,23 @@
+import asyncio
+import http.client
 import json
+import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
 
 import config
 from mcp.server import MCPServer
+from mcp.server.caching import CacheHint
+from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp_types import (
+    ElicitRequest,
+    ElicitRequestFormParams,
+    ElicitRequestURLParams,
+    InputRequiredResult,
+)
+from pydantic import BaseModel
 
 DUFFEL_URL = "https://api.duffel.com"
 
@@ -32,13 +44,23 @@ def duffel(path: str, payload: dict | None = None) -> dict:
             return json.load(response)
     except urllib.error.HTTPError as error:
         raise ToolError(f"Duffel {error.code}: {error.read().decode()}") from error
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+    # OSError covers URLError, timeouts and a connection reset mid-read
+    except (OSError, http.client.HTTPException, json.JSONDecodeError) as error:
         raise ToolError(
             f"Duffel request to {path.split('?')[0]} failed: {error}"
         ) from error
 
 
-mcp = MCPServer("flights", version="0.1.0")
+# Baggage rules and airport names do not change, so a client may keep a read for a day.
+# The hint covers every resources/read, bookings too, so the scope is private and
+# book_flight's update event tells listening clients to drop their copy.
+mcp = MCPServer(
+    "flights",
+    version="0.1.0",
+    cache_hints={"resources/read": CacheHint(ttl_ms=86_400_000, scope="private")},
+)
+
+bookings: list[dict] = []
 
 
 @mcp.tool()
@@ -102,11 +124,100 @@ def seats_for_offer(offer_id: str) -> dict:
     return {"cabins": cabins}
 
 
+class Passport(BaseModel):
+    passport_number: str
+    nationality: str  # ISO-2, e.g. IN
+    expires_on: str  # YYYY-MM-DD
+    born_on: str  # YYYY-MM-DD
+
+
+# Passport answers wait here between rounds. request_state only carries the token,
+# so the client never echoes passport details back.
+pending: dict[str, dict] = {}
+
+
 @mcp.tool()
-def book_flight(offer_id: str, given_name: str, family_name: str) -> dict:
-    """Book one offer for one adult passenger. Test mode only."""
+async def book_flight(
+    offer_id: str, given_name: str, family_name: str, ctx: Context
+) -> dict | InputRequiredResult:
+    """Book one offer for one adult passenger. Test mode only.
+
+    Asks the user for passport details, then sends them to a payment page.
+    """
+    answers = ctx.input_responses or {}
+
+    # Round 1. The model has the offer and a name, not a passport. Ask the human.
+    if "passport" not in answers and ctx.request_state is None:
+        return InputRequiredResult(
+            input_requests={
+                "passport": ElicitRequest(
+                    params=ElicitRequestFormParams(
+                        message=f"Passport details for {given_name} {family_name}",
+                        requested_schema=Passport.model_json_schema(),
+                    )
+                )
+            }
+        )
+
+    # Round 2. Card numbers must never travel through MCP, so payment is a URL.
+    if "passport" in answers:
+        if answers["passport"].action != "accept":
+            return {"status": "booking cancelled, the user gave no passport details"}
+        token = secrets.token_urlsafe(8)
+        pending[token] = Passport.model_validate(answers["passport"].content).model_dump()
+        return InputRequiredResult(
+            input_requests={
+                "payment": ElicitRequest(
+                    params=ElicitRequestURLParams(
+                        message=(
+                            "Payment would happen on this page. Sandbox: the page does not "
+                            "exist and nothing is charged, Duffel uses test balance. Confirm to book."
+                        ),
+                        # sandbox: nothing is charged, Duffel takes it from test balance
+                        url=f"https://pay.example.com/checkout/{token}",
+                        elicitation_id=token,
+                    )
+                )
+            },
+            request_state=token,
+        )
+
+    # Round 3. Back from the payment page.
+    passport = pending.pop(ctx.request_state, None)
+    if passport is None:
+        raise ToolError("Booking session expired, start again.")
+    if answers.get("payment") is None or answers["payment"].action != "accept":
+        return {"status": "booking cancelled, the user did not confirm payment"}
+
+    booking = await asyncio.to_thread(_book, offer_id, given_name, family_name, passport)
+    bookings.append(booking)
+    # anyone listening on flights://bookings gets told to read it again
+    await ctx.notify_resource_updated("flights://bookings")
+    return booking
+
+
+def _book(offer_id: str, given_name: str, family_name: str, passport: dict) -> dict:
     offer = duffel(f"/air/offers/{urllib.parse.quote(offer_id, safe='')}")["data"]
-    passenger_id = offer["passengers"][0]["id"]
+    passenger = {
+        "id": offer["passengers"][0]["id"],
+        "given_name": given_name,
+        "family_name": family_name,
+        "born_on": passport["born_on"],
+        "gender": "m",
+        "title": "mr",
+        "email": "student@example.com",
+        "phone_number": "+442080160509",
+    }
+    # only some routes want the passport itself, and Duffel rejects it on the others
+    if offer.get("passenger_identity_documents_required"):
+        passenger["identity_documents"] = [
+            {
+                "type": "passport",
+                "unique_identifier": passport["passport_number"],
+                "issuing_country_code": passport["nationality"],
+                "expires_on": passport["expires_on"],
+            }
+        ]
 
     order = duffel(
         "/air/orders",
@@ -121,18 +232,7 @@ def book_flight(offer_id: str, given_name: str, family_name: str) -> dict:
                         "currency": offer["total_currency"],
                     }
                 ],
-                "passengers": [
-                    {
-                        "id": passenger_id,
-                        "given_name": given_name,
-                        "family_name": family_name,
-                        "born_on": "1990-01-01",
-                        "gender": "m",
-                        "title": "mr",
-                        "email": "student@example.com",
-                        "phone_number": "+442080160509",
-                    }
-                ],
+                "passengers": [passenger],
             }
         },
     )["data"]
@@ -168,6 +268,12 @@ def airports() -> str:
         "LAX Los Angeles International\n"
         "LON London all airports"
     )
+
+
+@mcp.resource("flights://bookings")
+def bookings_made() -> str:
+    """Bookings made since this server started."""
+    return json.dumps(bookings)
 
 
 if __name__ == "__main__":

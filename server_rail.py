@@ -1,3 +1,5 @@
+import asyncio
+import http.client
 import json
 import urllib.error
 import urllib.parse
@@ -5,6 +7,7 @@ import urllib.request
 
 import config
 from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
 
 RAILRADAR_URL = "https://api.railradar.in/v1"
@@ -37,7 +40,8 @@ def railradar(path: str, payload: dict | None = None) -> dict:
             return json.load(response)["data"]
     except urllib.error.HTTPError as error:
         raise ToolError(f"RailRadar {error.code}: {error.read().decode()}") from error
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+    # OSError covers URLError, timeouts and a connection reset mid-read
+    except (OSError, http.client.HTTPException, json.JSONDecodeError) as error:
         raise ToolError(
             f"RailRadar request to {path.split('?')[0]} failed: {error}"
         ) from error
@@ -146,6 +150,34 @@ def train_fare(
     }
 
 
+@mcp.tool()
+async def check_fares(
+    trains: list[str],
+    from_station: str,
+    to_station: str,
+    date: str,
+    travel_class: str,
+    ctx: Context,
+) -> list[dict]:
+    """Price several trains on the same route in one call. Reports progress as it goes.
+
+    Same arguments as train_fare, with a list of train numbers.
+    """
+    fares = []
+    for i, train in enumerate(trains, 1):
+        # a sync tool runs on a worker thread and cannot report, so this one is async
+        await ctx.report_progress(i - 1, len(trains), f"pricing {train}")
+        try:
+            fare = await asyncio.to_thread(
+                train_fare, train, from_station, to_station, date, travel_class
+            )
+        except ToolError as error:
+            fare = {"train": train, "error": str(error)}
+        fares.append(fare)
+    await ctx.report_progress(len(trains), len(trains), "done")
+    return fares
+
+
 @mcp.resource("rail://stations")
 def stations() -> str:
     """Every station code to name."""
@@ -178,7 +210,8 @@ Transport
 - Between two Indian cities, go by train. Find station codes with search_stations,
   then route every Indian leg in one plan_journey call, using stayDays for the
   nights. Nothing should depart before 06:00 or arrive after 22:00.
-- Price each chosen train with train_fare in the requested class.
+- Price the chosen trains with check_fares in the requested class, one call
+  per leg.
 - Any leg that leaves India or runs between two cities outside India is a flight.
   Use search_flights with IATA codes and pick the cheapest sensible offer.
 - Overnight trains and long flights arrive the next day. Shift the hotel dates
