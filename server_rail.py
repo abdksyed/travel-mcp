@@ -158,5 +158,53 @@ def trains() -> str:
     return json.dumps(railradar("/lookup/trains"))
 
 
+@mcp.prompt()
+def plan_trip(request: str) -> str:
+    """Plan a whole trip from a plain English request.
+
+    e.g. "Bangalore to Mumbai to Delhi by train from 5 December, then London and
+    New York, 2 nights each in India, 3 abroad, budget 4 lakh".
+    """
+    return f"""Plan a complete trip from this request:
+
+{request}
+
+Read the route, start date, nights per city, travellers, train class, budget and
+interests from the request. Anything it does not say: 1 adult, train class 3A,
+2 nights per city, no fixed budget, interests food, history and local markets.
+If the start date is missing, ask for it instead of guessing.
+
+Transport
+- Between two Indian cities, go by train. Find station codes with search_stations,
+  then route every Indian leg in one plan_journey call, using stayDays for the
+  nights. Nothing should depart before 06:00 or arrive after 22:00.
+- Price each chosen train with train_fare in the requested class.
+- Any leg that leaves India or runs between two cities outside India is a flight.
+  Use search_flights with IATA codes and pick the cheapest sensible offer.
+- Overnight trains and long flights arrive the next day. Shift the hotel dates
+  so the nights in each city stay as asked.
+
+Hotels
+- One hotel per city for exactly those nights. Use post_hotels_rates with
+  cityName and countryCode, limit 3, maxRatesPerHotel 1, currency INR,
+  guestNationality IN.
+- For the hotel you pick, read get_data_reviews with limit 5 and say in one
+  line what guests like or dislike.
+
+Things to do
+- Two or three things per day in each city, matching the interests.
+- No tool covers this. Use what you know and say so.
+
+If the total goes over the budget, say which choice to change.
+
+Answer with
+1. A day by day table: date, city, what happens.
+2. A transport table: leg, train or flight number, depart, arrive, price.
+3. A hotel table: city, hotel, rating, dates, total price.
+4. A total in INR. Convert other currencies roughly and say that you did.
+
+Do not book or prebook anything. Trains cannot be booked here, so point to
+https://www.irctc.co.in for those."""
+
 if __name__ == "__main__":
     mcp.run(transport="streamable-http", port=8001)

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from contextlib import AsyncExitStack
 from datetime import date
 from pathlib import Path
@@ -36,6 +37,9 @@ PROMPT = (
     "in each city with the price, and what to do in each city."
 )
 
+# Slash commands the user can type. The user picks a prompt, the model never sees the list.
+commands = {"/plan": ("rail", "plan_trip")}
+
 
 def schema_tokens(tools: list[dict]) -> int:
     """Rough cost of the catalog, four characters to a token."""
@@ -44,6 +48,14 @@ def schema_tokens(tools: list[dict]) -> int:
 
 async def main():
     llm = AsyncOpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
+
+    # the shell already split and unquoted the words, so use argv as given
+    words = sys.argv[1:]
+    # catch a typo before paying for three connections
+    if words and words[0].startswith("/") and words[0] not in commands:
+        raise SystemExit(f"unknown command {words[0]}, try: {', '.join(commands)}")
+    if words and words[0] in commands and len(words) == 1:
+        raise SystemExit(f"usage: {words[0]} <describe the trip in plain English>")
 
     async with AsyncExitStack() as stack:
         clients = {}
@@ -97,7 +109,19 @@ async def main():
 
         system = f"You are a concise travel assistant. Today is {date.today()}."
         messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": PROMPT})
+        if words and words[0].startswith("/"):
+            command, *words = words
+            server, name = commands[command]
+            listed = (await clients[server].list_prompts()).prompts
+            prompt = next(p for p in listed if p.name == name)
+            # everything after the command is the request, in the user's own words
+            arguments = {prompt.arguments[0].name: " ".join(words)}
+            print(f"[prompt]  {name}({', '.join(f'{k}={v}' for k, v in arguments.items())})")
+            result = await clients[server].get_prompt(name, arguments)
+            for m in result.messages:
+                messages.append({"role": m.role, "content": m.content.text})
+        else:
+            messages.append({"role": "user", "content": " ".join(words) or PROMPT})
 
         while True:
             response = await llm.chat.completions.create(
