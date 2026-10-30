@@ -159,31 +159,26 @@ def trains() -> str:
 
 
 @mcp.prompt()
-def plan_trip(
-    cities: str,
-    start_date: str,
-    nights: str,
-    adults: str = "1",
-    train_class: str = "3A",
-    budget_inr: str = "no fixed budget",
-    interests: str = "food, history, local markets",
-) -> str:
-    """Plan a multi city trip: trains inside India, flights abroad, a hotel per city.
+def plan_trip(request: str) -> str:
+    """Plan a whole trip from a plain English request.
 
-    cities is the route in order, comma separated, e.g. "Bangalore, Mumbai, Delhi, London".
-    nights is one number per city after the first, comma separated, e.g. "2, 2, 3".
+    e.g. "Bangalore to Mumbai to Delhi by train from 5 December, then London and
+    New York, 2 nights each in India, 3 abroad, budget 4 lakh".
     """
-    return f"""Plan a complete trip for {adults} adult(s).
+    return f"""Plan a complete trip from this request:
 
-Route, in order: {cities}
-Leave the first city on {start_date}.
-Nights in each city after the first, in order: {nights}
+{request}
+
+Read the route, start date, nights per city, travellers, train class, budget and
+interests from the request. Anything it does not say: 1 adult, train class 3A,
+2 nights per city, no fixed budget, interests food, history and local markets.
+If the start date is missing, ask for it instead of guessing.
 
 Transport
 - Between two Indian cities, go by train. Find station codes with search_stations,
   then route every Indian leg in one plan_journey call, using stayDays for the
   nights. Nothing should depart before 06:00 or arrive after 22:00.
-- Price each chosen train with train_fare in class {train_class}.
+- Price each chosen train with train_fare in the requested class.
 - Any leg that leaves India or runs between two cities outside India is a flight.
   Use search_flights with IATA codes and pick the cheapest sensible offer.
 - Overnight trains and long flights arrive the next day. Shift the hotel dates
@@ -197,10 +192,10 @@ Hotels
   line what guests like or dislike.
 
 Things to do
-- Two or three things per day in each city, matching these interests: {interests}.
+- Two or three things per day in each city, matching the interests.
 - No tool covers this. Use what you know and say so.
 
-Budget: {budget_inr}. If the total goes over it, say which choice to change.
+If the total goes over the budget, say which choice to change.
 
 Answer with
 1. A day by day table: date, city, what happens.

@@ -49,6 +49,14 @@ def schema_tokens(tools: list[dict]) -> int:
 async def main():
     llm = AsyncOpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
 
+    # the shell already split and unquoted the words, so use argv as given
+    words = sys.argv[1:]
+    # catch a typo before paying for three connections
+    if words and words[0].startswith("/") and words[0] not in commands:
+        raise SystemExit(f"unknown command {words[0]}, try: {', '.join(commands)}")
+    if words and words[0] in commands and len(words) == 1:
+        raise SystemExit(f"usage: {words[0]} <describe the trip in plain English>")
+
     async with AsyncExitStack() as stack:
         clients = {}
         everything = []
@@ -101,17 +109,13 @@ async def main():
 
         system = f"You are a concise travel assistant. Today is {date.today()}."
         messages.append({"role": "system", "content": system})
-        # the shell already split and unquoted the words, so use argv as given
-        words = sys.argv[1:]
         if words and words[0].startswith("/"):
             command, *words = words
             server, name = commands[command]
             listed = (await clients[server].list_prompts()).prompts
             prompt = next(p for p in listed if p.name == name)
-            # key=value sets one argument, bare words fill the rest in order
-            named = dict(w.split("=", 1) for w in words if "=" in w)
-            rest = [a.name for a in prompt.arguments if a.name not in named]
-            arguments = named | dict(zip(rest, [w for w in words if "=" not in w]))
+            # everything after the command is the request, in the user's own words
+            arguments = {prompt.arguments[0].name: " ".join(words)}
             print(f"[prompt]  {name}({', '.join(f'{k}={v}' for k, v in arguments.items())})")
             result = await clients[server].get_prompt(name, arguments)
             for m in result.messages:
