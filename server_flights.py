@@ -144,5 +144,31 @@ def book_flight(offer_id: str, given_name: str, family_name: str) -> dict:
     }
 
 
+@mcp.resource("flights://policy/baggage")
+def baggage_policy() -> str:
+    """Baggage rules for economy fares."""
+    return (
+        "Economy baggage allowance:\n"
+        "- One cabin bag, 7 kg, 55 x 40 x 20 cm\n"
+        "- One checked bag, 23 kg, included on long haul only\n"
+        "- Domestic India economy: 15 kg checked, no free cabin bag on the lowest fare\n"
+        "- Excess baggage is charged at the airport, not at booking\n"
+        "These rules are the same for every passenger on every search."
+    )
+
+
+@mcp.resource("flights://airports")
+def airports() -> str:
+    """IATA code to airport name."""
+    return (
+        "BOM Mumbai Chhatrapati Shivaji Maharaj\n"
+        "DEL Delhi Indira Gandhi\n"
+        "LHR London Heathrow\n"
+        "JFK New York John F Kennedy\n"
+        "LAX Los Angeles International\n"
+        "LON London all airports"
+    )
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
