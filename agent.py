@@ -12,7 +12,7 @@ params = StdioServerParameters(
     command="uv", args=["run", "python", "server_flights.py"], cwd=here
 )
 
-PROMPT = "find me a cheap flight from BOM to DEL on 10 November 2026 and tell me the airline"
+PROMPT = "what is the baggage allowance from BOM to DEL, and which airport is DEL?"
 
 
 async def main():
@@ -35,10 +35,18 @@ async def main():
                 }
             )
 
-        messages = [
-            {"role": "system", "content": "You are a concise travel assistant."},
-            {"role": "user", "content": PROMPT},
-        ]
+        messages = []
+
+        # The application decides what the model may know, before it is asked.
+        for uri in ("flights://policy/baggage", "flights://airports"):
+            r = await c.read_resource(uri)
+            print("[resource]", uri, "->", len(r.contents[0].text), "chars")
+            messages.append(
+                {"role": "system", "content": f"{uri}\n{r.contents[0].text}"}
+            )
+
+        messages.append({"role": "system", "content": "You are a concise travel assistant."})
+        messages.append({"role": "user", "content": PROMPT})
 
         while True:
             response = llm.chat.completions.create(
